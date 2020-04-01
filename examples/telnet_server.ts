@@ -8,6 +8,8 @@ const server = Deno.listen(
   },
 );
 
+console.log("Listening on", server.addr);
+
 for await (const conn of server) {
   console.log("Client connected from:", conn.remoteAddr);
   async function send(data: string): Promise<number> {
