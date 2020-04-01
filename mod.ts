@@ -209,13 +209,7 @@ export class Parser extends EventEmitter<IParserEvents> {
       .filter((x) => x.length > 0)
       .map((x) => cleanSubnegotiationData(x))
       .forEach((buff) => {
-        if (
-          buff.length > 2 && buff[buff.length - 2] === 0x0d &&
-          buff[buff.length - 1] === 0x0a
-        ) {
-          buff = buff.slice(0, buff.length - 2);
-          this.emit("data", buff);
-        } else if (buff[0] === Command.IAC) {
+        if (buff[0] === Command.IAC) {
           // IAC sequence
           switch (buff[1]) {
             case Command.SB:
@@ -246,6 +240,14 @@ export class Parser extends EventEmitter<IParserEvents> {
               this.emit("negotiation", buff[1], buff[2]);
               break;
           }
+        } else {
+          if (
+            buff.length > 2 && buff[buff.length - 2] === 0x0d &&
+            buff[buff.length - 1] === 0x0a
+          ) {
+            buff = buff.slice(0, buff.length - 2);
+          }
+          this.emit("data", buff);
         }
       });
     this.buffer = new Uint8Array(0);
