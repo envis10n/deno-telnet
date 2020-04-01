@@ -5,7 +5,7 @@ Telnet / GMCP helper and parser for Deno.
 ## Usage
 
 ```ts
-import WS from "https://raw.githubusercontent.com/envis10n/deno-telnet/0.1.0/mod.ts";
+import { Parser, Option, Command } from "https://raw.githubusercontent.com/envis10n/deno-telnet/0.1.0/mod.ts";
 ```
 
 Where `0.1.0` is a valid release tag or branch.
