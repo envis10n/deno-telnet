@@ -143,6 +143,43 @@ interface IParserEvents {
   subnegotiation(option: number, data: Uint8Array): void;
   gmcp(namespace: string, data: string | { [key: string]: any }): void;
 }
+export function WILL(option: Option): Uint8Array {
+  return buildTelnetCommand(Command.WILL, option);
+}
+export function WONT(option: Option): Uint8Array {
+  return buildTelnetCommand(Command.WONT, option);
+}
+export function DO(option: Option): Uint8Array {
+  return buildTelnetCommand(Command.DO, option);
+}
+export function DONT(option: Option): Uint8Array {
+  return buildTelnetCommand(Command.DONT, option);
+}
+export function buildGMCP(namespace: string): Uint8Array;
+export function buildGMCP(namespace: string, data: any[]): Uint8Array;
+export function buildGMCP(
+  namespace: string,
+  data: { [key: string]: any },
+): Uint8Array;
+export function buildGMCP(namespace: string, data: string): Uint8Array;
+export function buildGMCP(
+  namespace: string,
+  data?: any[] | { [key: string]: any } | string,
+): Uint8Array {
+  let d: string = "";
+  if (data !== undefined) {
+    if (typeof data === "string") {
+      d = data;
+    } else {
+      d = JSON.stringify(data);
+    }
+  }
+  return buildTelnetCommand(
+    Command.SB,
+    Option.GMCP,
+    new TextEncoder().encode(`${namespace} ${d}`),
+  );
+}
 export function buildTelnetCommand(command: Command.GA): Uint8Array;
 export function buildTelnetCommand(
   command: number,
