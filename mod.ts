@@ -1,4 +1,4 @@
-import { EventEmitter } from "https://raw.githubusercontent.com/envis10n/deno-events/0.1.0/mod.ts";
+import { EventEmitter } from "https://deno.land/x/deno-events@0.1.1/mod.ts";
 import { concat } from "https://deno.land/std/bytes/mod.ts";
 
 function decode(input?: Uint8Array): string {
