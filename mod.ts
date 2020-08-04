@@ -1,5 +1,5 @@
-import { EventEmitter } from "https://deno.land/x/deno-events@0.1.1/mod.ts";
-import { concat } from "https://deno.land/std/bytes/mod.ts";
+import { EventEmitter } from "https://deno.land/x/deno_events@0.1.1/mod.ts";
+import { concat } from "https://deno.land/std@0.63.0/bytes/mod.ts";
 
 function decode(input?: Uint8Array): string {
   return new TextDecoder().decode(input);
