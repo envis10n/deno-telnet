@@ -4,6 +4,30 @@ import { concat } from "https://deno.land/std@0.63.0/bytes/mod.ts";
 function decode(input?: Uint8Array): string {
   return new TextDecoder().decode(input);
 }
+enum ETelnetEvent {
+  Data,
+  IAC,
+  Negotiation,
+  SubNegotiation
+}
+
+interface ITelnetEvent {
+  eventType: ETelnetEvent;
+}
+interface ITData extends ITelnetEvent {
+  buffer: Uint8Array;
+}
+interface ITIAC extends ITelnetEvent {
+  command: number;
+}
+interface ITNegotiation extends ITelnetEvent {
+  command: number;
+  option: number;
+}
+interface ITSubNegotiation extends ITelnetEvent {
+  option: number;
+  data: Uint8Array;
+}
 
 export enum Command {
   /** Mark the start of a negotiation sequence. */
@@ -25,6 +49,7 @@ export enum Command {
   SEND = 1,
   /** Go Ahead */
   GA = 249,
+  EOR = 239,
 }
 export enum Option {
   /** Whether the other side should interpret data as 8-bit characters instead of standard NVT ASCII.  */
@@ -93,6 +118,8 @@ export enum Option {
      */
   GMCP = 201,
   EXTENDED_OPTIONS_LIST = 255,
+  MCCP2 = 86,
+  MCCP3 = 87,
 }
 export enum OptionState {
   DISABLED,
@@ -117,6 +144,22 @@ export class OptionMatrix {
   public SetState(option: number, state: OptionState): void {
     this._options[option] = state;
   }
+}
+export function escapeIAC(data: Uint8Array): Uint8Array {
+  const temp: number[] = [];
+  data.forEach((b) => {
+    if (b == 255) temp.push(255);
+    temp.push(b);
+  });
+  return new Uint8Array(temp);
+}
+export function unescapeIAC(data: Uint8Array): Uint8Array {
+  const temp: number[] = [];
+  for (let i = 0; i < data.byteLength; i++) {
+    if (data[i] == 255 && i + 1 < data.byteLength && data[i + 1] == 255) continue; // Skip double IAC
+    temp.push(data[i]);
+  }
+  return new Uint8Array(temp);
 }
 export function cleanSubnegotiationData(data: Uint8Array): Uint8Array {
   const temp: number[] = [];
@@ -208,7 +251,7 @@ export function buildTelnetCommand(
         );
       }
       return new Uint8Array(
-        [Command.IAC, Command.SB, option, ...data, Command.IAC, Command.SE],
+        [Command.IAC, Command.SB, option, ...escapeIAC(data), Command.IAC, Command.SE],
       );
     case Command.GA:
       return new Uint8Array([Command.IAC, Command.GA]);
@@ -222,71 +265,116 @@ export function buildTelnetCommand(
 export class Parser extends EventEmitter<IParserEvents> {
   private buffer: Uint8Array = new Uint8Array(0);
   public accumulate(data: Uint8Array): void {
+    enum EParseState {
+      Normal,
+      IAC,
+      Neg,
+      SubNeg,
+    }
     if (this.buffer.length === 0) this.buffer = data;
     else this.buffer = concat(this.buffer, data);
-    const buffers: Uint8Array[] = [];
-    let iac = this.buffer.indexOf(255);
-    if (iac !== -1) iac = this.buffer.indexOf(255);
-    let behind = 0;
-    while (iac !== -1) {
-      if (this.buffer[iac + 1] === 255) iac += 2;
-      else {
-        if (this.buffer[iac + 1] === 240) iac += 2;
-        buffers.push(this.buffer.slice(behind, iac));
-        behind = iac;
-        iac = this.buffer.indexOf(255, behind + 1);
-      }
-    }
-    if (behind < this.buffer.length && buffers.length > 0) {
-      buffers.push(this.buffer.slice(behind));
-    } else {
-      buffers.push(this.buffer);
-    }
-    buffers
-      .filter((x) => x.length > 0)
-      .map((x) => cleanSubnegotiationData(x))
-      .forEach((buff) => {
-        if (buff[0] === Command.IAC) {
-          // IAC sequence
-          switch (buff[1]) {
-            case Command.SB:
-              const option: number = buff[2];
-              const data: Uint8Array = buff.slice(3, buff.length - 2);
-              this.emit("subnegotiation", option, data);
-              if (option === Option.GMCP) {
-                // GMCP data
-                const dstr = decode(data);
-                let offset = dstr.indexOf(" ");
-                if (offset === -1) offset = dstr.length;
-                const namespace = dstr.substring(0, offset);
-                const ostr = offset === dstr.length
-                  ? ""
-                  : dstr.substring(offset + 1);
-                try {
-                  const obj = JSON.parse(ostr);
-                  this.emit("gmcp", namespace, obj);
-                } catch {
-                  this.emit("gmcp", namespace, ostr);
-                }
-              }
+    const events: ITelnetEvent[] = [];
+    let cmd_begin = 0;
+    let state: EParseState = EParseState.Normal;
+    for (let index = 0; index < this.buffer.length; index++) {
+      const val = this.buffer[index];
+      switch (state) {
+        case EParseState.Normal:
+          if (val == Command.IAC) {
+            if (cmd_begin < index) {
+              events.push(<ITData>({eventType: ETelnetEvent.Data, buffer: this.buffer.slice(cmd_begin, index)}));
+            }
+            cmd_begin = index;
+            state = EParseState.IAC;
+          }
+          break;
+        case EParseState.IAC:
+          switch (val) {
+            case Command.IAC:
+              state = EParseState.Normal;
               break;
             case Command.GA:
-              this.emit("goahead");
+            case Command.EOR:
+            case Command.NOP:
+              events.push(<ITIAC>({eventType: ETelnetEvent.IAC, command: val}));
+              cmd_begin = index + 1;
+              state = EParseState.Normal;
+              break;
+            case Command.SB:
+              state = EParseState.SubNeg;
               break;
             default:
-              this.emit("negotiation", buff[1], buff[2]);
+              state = EParseState.Neg;
               break;
           }
-        } else {
-          if (
-            buff.length > 2 && buff[buff.length - 2] === 0x0d &&
-            buff[buff.length - 1] === 0x0a
-          ) {
-            buff = buff.slice(0, buff.length - 2);
+          break;
+        case EParseState.Neg:
+          const cmd = this.buffer[cmd_begin + 1];
+          const opt = this.buffer[index];
+          events.push(<ITNegotiation>({eventType: ETelnetEvent.Negotiation, command: cmd, option: opt }));
+          cmd_begin = index + 1;
+          state = EParseState.Normal;
+          break;
+        case EParseState.SubNeg:
+          if (val == Command.SE) {
+            let opt = this.buffer[cmd_begin + 2];
+            events.push(<ITSubNegotiation>({eventType: ETelnetEvent.SubNegotiation, option: opt, data: unescapeIAC(this.buffer.slice(cmd_begin + 3, index - 1)) }));
+            if (opt == Option.MCCP2 || opt == Option.MCCP3) {
+              events.push(<ITData>({eventType: ETelnetEvent.Data, buffer: this.buffer.slice(index + 1) }));
+              cmd_begin = this.buffer.length;
+              break;
+            } else {
+              cmd_begin = index + 1;
+              state = EParseState.Normal;
+            }
           }
-          this.emit("data", buff);
-        }
-      });
-    this.buffer = new Uint8Array(0);
+          break;
+      }
+    }
+    if (state == EParseState.SubNeg) {
+      this.buffer = this.buffer.slice(cmd_begin);
+    } else {
+      if (cmd_begin < this.buffer.length) {
+        events.push(<ITData>({eventType: ETelnetEvent.Data, buffer: this.buffer.slice(cmd_begin) }));
+      }
+      this.buffer = new Uint8Array(0);
+    }
+    events.forEach((ev) => {
+      let e;
+      switch (ev.eventType) {
+        case ETelnetEvent.Data:
+          e = ev as ITData;
+          this.emit("data", e.buffer);
+          break;
+        case ETelnetEvent.IAC:
+          e = ev as ITIAC;
+          this.emit("goahead");
+          break;
+        case ETelnetEvent.Negotiation:
+          e = ev as ITNegotiation;
+          this.emit("negotiation", e.command, e.option);
+          break;
+        case ETelnetEvent.SubNegotiation:
+          e = ev as ITSubNegotiation;
+          this.emit("subnegotiation", e.option, e.data);
+          if (e.option == Option.GMCP) {
+            // GMCP data
+            const dstr = decode(e.data);
+            let offset = dstr.indexOf(" ");
+            if (offset === -1) offset = dstr.length;
+            const namespace = dstr.substring(0, offset);
+            const ostr = offset === dstr.length
+              ? ""
+              : dstr.substring(offset + 1);
+            try {
+              const obj = JSON.parse(ostr);
+              this.emit("gmcp", namespace, obj);
+            } catch {
+              this.emit("gmcp", namespace, ostr);
+            }
+          }
+          break;
+      }
+    });
   }
 }
