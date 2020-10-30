@@ -20,11 +20,15 @@ parser.on("subnegotiation", (option, data) => {
 
 parser.on("gmcp", (namespace, data) => {
   /*
-        GMCP subnegotiation data.
-        Namespace will be of the format "Package[.SubPackages].Message"
-        Data will be a string or Object
-        If data is an empty string, then there was no data provided.
-    */
+    GMCP subnegotiation data.
+    Namespace will be of the format "Package[.SubPackages].Message"
+    Data will be a string or Object
+    If data is an empty string, then there was no data provided.
+  */
+});
+
+parser.on("send", (chunk) => {
+  // Data to be sent to remote end.
 });
 
 parser.accumulate(new Uint8Array([Command.IAC, Command.GA])); // Accumulate a GA.

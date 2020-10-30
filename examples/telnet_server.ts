@@ -36,17 +36,8 @@ for await (const conn of server) {
     Telnet.buildTelnetCommand(Telnet.Command.WILL, Telnet.Option.GMCP),
   );
   send("Welcome to the Deno Telnet server!");
-  (async () => {
-    while (true) {
-      let buf = new Uint8Array(1024);
-      const res = await conn.read(buf);
-      if (res === Deno.EOF) {
-        // EOF
-        break;
-      } else {
-        parser.accumulate(buf.slice(0, res));
-      }
-    }
-    console.log("Client disconnected.");
-  })();
+  for await (const data of Deno.iter(conn)) {
+    parser.accumulate(data);
+  }
+  console.log("Client disconnected.");
 }
