@@ -121,28 +121,88 @@ export enum Option {
   MCCP2 = 86,
   MCCP3 = 87,
 }
-export enum OptionState {
-  DISABLED,
-  WAITING,
-  ENABLED,
+export type TCompSupport = { [key: number]: CompatibilityEntry | number };
+export enum EOption {
+  Local = 1 << 0,
+  Remote = 1 << 1,
+  LocalEnabled = 1 << 2,
+  RemoteEnabled = 1 << 3,
 }
-export interface IOptionMatrix {
-  [key: number]: OptionState;
+export class CompatibilityEntry {
+  local: boolean = false;
+  remote: boolean = false;
+  localEnabled: boolean = false;
+  remoteEnabled: boolean = false;
+  public static fromMask(mask: number): CompatibilityEntry {
+    const com = new CompatibilityEntry();
+    com.local = (mask & EOption.Local) == EOption.Local;
+    com.remote = (mask & EOption.Remote) == EOption.Remote;
+    com.localEnabled = (mask & EOption.LocalEnabled) == EOption.LocalEnabled;
+    com.remoteEnabled = (mask & EOption.RemoteEnabled) == EOption.RemoteEnabled;
+    return com;
+  }
+  public toMask(): number {
+    let res = 0;
+    if (this.local) res |= EOption.Local;
+    if (this.remote) res |= EOption.Remote;
+    if (this.localEnabled) res |= EOption.LocalEnabled;
+    if (this.remoteEnabled) res |= EOption.RemoteEnabled;
+    return res;
+  }
+  public reset(): void {
+    this.localEnabled = false;
+    this.remoteEnabled = false;
+  }
 }
-export class OptionMatrix {
-  private _options: IOptionMatrix = {};
-  public GetState(option: number): OptionState {
-    if (this._options[option] === undefined) {
-      this._options[option] = OptionState.DISABLED;
-    }
-    return this._options[option];
+export class CompatibilityTable {
+  _table: number[] = new Array(256).fill(0);
+  constructor(supports: TCompSupport = {}) {
+    Object.keys(supports).forEach((key) => {
+      const option = Number(key);
+      const val = supports[option];
+      if (val instanceof CompatibilityEntry) {
+        this.setOption(option, val);
+      } else {
+        this.setOptionMask(option, val);
+      }
+    });
   }
-  public HasOption(option: number): boolean {
-    return this._options[option] !== undefined &&
-      this._options[option] === OptionState.ENABLED;
+  public reset(): void {
+    this._table = this._table.map((v) => {
+      const ent = CompatibilityEntry.fromMask(v);
+      ent.reset();
+      return ent.toMask();
+    });
   }
-  public SetState(option: number, state: OptionState): void {
-    this._options[option] = state;
+  public clone(): CompatibilityTable {
+    const supports: TCompSupport = {};
+    this._table.filter((v) => v != 0).forEach((v, i) => {
+      supports[i] = v;
+    });
+    return new CompatibilityTable(supports);
+  }
+  public supportRemote(option: number): void {
+    const ent = CompatibilityEntry.fromMask(this._table[option]);
+    ent.remote = true;
+    this.setOption(option, ent);
+  }
+  public support(option: number): void {
+    const ent = CompatibilityEntry.fromMask(this._table[option]);
+    ent.remote = true;
+    ent.local = true;
+    this.setOption(option, ent);
+  }
+  public setOptionMask(option: number, mask: number): void {
+    this._table[option] = mask;
+  }
+  public setOption(option: number, entry: CompatibilityEntry): void {
+    this._table[option] = entry.toMask();
+  }
+  public getOptionMask(option: number): number {
+    return this._table[option];
+  }
+  public getOption(option: number): CompatibilityEntry {
+    return CompatibilityEntry.fromMask(this._table[option]);
   }
 }
 export function escapeIAC(data: Uint8Array): Uint8Array {
@@ -181,6 +241,7 @@ export class TelnetBuildError extends Error {
 }
 interface IParserEvents {
   data(chunk: Uint8Array): void;
+  send(chunk: Uint8Array): void;
   goahead(): void;
   negotiation(command: number, option: number): void;
   subnegotiation(option: number, data: Uint8Array): void;
@@ -263,7 +324,47 @@ export function buildTelnetCommand(
   }
 }
 export class Parser extends EventEmitter<IParserEvents> {
+  public options: CompatibilityTable;
   private buffer: Uint8Array = new Uint8Array(0);
+  constructor(supports?: TCompSupport) {
+    super();
+    this.options = new CompatibilityTable(supports);
+  }
+  public getEnabledOptions(): number[] {
+    const res: number[] = [];
+    this.options._table.filter((v) => (v & EOption.Local) == EOption.Local).forEach((v, option) => {
+      res.push(option);
+    });
+    return res;
+  }
+  public WILL(option: number) {
+    const opt = this.options.getOption(option);
+    if (opt.local && !opt.localEnabled) {
+      opt.localEnabled = true;
+      this.options.setOption(option, opt);
+      this.emit("send", WILL(option));
+    }
+  }
+  public WONT(option: number) {
+    const opt = this.options.getOption(option);
+    if (opt.localEnabled) {
+      opt.localEnabled = false;
+      this.options.setOption(option, opt);
+      this.emit("send", WONT(option));
+    }
+  }
+  public DO(option: number) {
+    const opt = this.options.getOption(option);
+    if (opt.remote && !opt.remoteEnabled) {
+      this.emit("send", DO(option));
+    }
+  }
+  public DONT(option: number) {
+    const opt = this.options.getOption(option);
+    if (opt.remoteEnabled) {
+      this.emit("send", DONT(option));
+    }
+  }
   public accumulate(data: Uint8Array): void {
     enum EParseState {
       Normal,
@@ -353,6 +454,42 @@ export class Parser extends EventEmitter<IParserEvents> {
         case ETelnetEvent.Negotiation:
           e = ev as ITNegotiation;
           this.emit("negotiation", e.command, e.option);
+          const opt = this.options.getOption(e.option);
+          switch (e.command) {
+            case Command.WILL:
+              if (opt.remote && !opt.remoteEnabled) {
+                opt.remoteEnabled = true;
+                this.options.setOption(e.option, opt);
+                this.emit("send", DO(e.option));
+              } else if (!opt.remote) {
+                this.emit("send", DONT(e.option));
+              }
+              break;
+            case Command.WONT:
+              if (opt.remoteEnabled) {
+                opt.remoteEnabled = false;
+                this.options.setOption(e.option, opt);
+                this.emit("send", DONT(e.option));
+              }
+              break;
+            case Command.DO:
+              if (opt.local && !opt.localEnabled) {
+                opt.localEnabled = true;
+                opt.remoteEnabled = true;
+                this.options.setOption(e.option, opt);
+                this.emit("send", WILL(e.option));
+              } else if (!opt.local) {
+                this.emit("send", WONT(e.option));
+              }
+              break;
+            case Command.DONT:
+              if (opt.localEnabled) {
+                opt.localEnabled = false;
+                this.options.setOption(e.option, opt);
+                this.emit("send", WONT(e.option));
+              }
+              break;
+          }
           break;
         case ETelnetEvent.SubNegotiation:
           e = ev as ITSubNegotiation;
@@ -377,4 +514,16 @@ export class Parser extends EventEmitter<IParserEvents> {
       }
     });
   }
+}
+
+export function parseGMCPSupports(obj: string[]): string[] {
+  let res: string[] = [];
+  obj.forEach((v) => {
+    const v1 = v.split(" ");
+    const namespace = v1[0];
+    if (v1[1] == "1") {
+      res.push(namespace);
+    }
+  });
+  return res;
 }
