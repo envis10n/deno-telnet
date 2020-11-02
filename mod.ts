@@ -1,5 +1,4 @@
-import { EventEmitter } from "https://deno.land/x/deno_events@0.1.1/mod.ts";
-import { concat } from "https://deno.land/std@0.63.0/bytes/mod.ts";
+import { deno_events, bytes } from "./deps.ts";
 
 function decode(input?: Uint8Array): string {
   return new TextDecoder().decode(input);
@@ -323,7 +322,7 @@ export function buildTelnetCommand(
       return new Uint8Array([Command.IAC, command, option]);
   }
 }
-export class Parser extends EventEmitter<IParserEvents> {
+export class Parser extends deno_events.EventEmitter<IParserEvents> {
   public options: CompatibilityTable;
   private buffer: Uint8Array = new Uint8Array(0);
   constructor(supports?: TCompSupport) {
@@ -373,7 +372,7 @@ export class Parser extends EventEmitter<IParserEvents> {
       SubNeg,
     }
     if (this.buffer.length === 0) this.buffer = data;
-    else this.buffer = concat(this.buffer, data);
+    else this.buffer = bytes.concat(this.buffer, data);
     const events: ITelnetEvent[] = [];
     let cmd_begin = 0;
     let state: EParseState = EParseState.Normal;
