@@ -1,4 +1,5 @@
 [![Deno](https://github.com/envis10n/deno-telnet/workflows/Deno/badge.svg)](https://deno.land/x/deno_telnet)
+[![deno doc](https://doc.deno.land/badge.svg)](https://doc.deno.land/https/deno.land/x/deno_telnet/mod.ts)
 
 # deno-telnet
 Telnet / GMCP helper and parser for Deno.
